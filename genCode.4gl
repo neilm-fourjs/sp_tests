@@ -210,9 +210,6 @@ FUNCTION getParams(l_func STRING, l_pf CHAR(1)) RETURNS(STRING, STRING, SMALLINT
 	DISPLAY SFMT("b=%1  z=%2  x=%3  bc=%4", b, z, x, bc)
 	LET l_in = base.StringBuffer.create()
 	CALL l_in.append(l_line.subString(b + 1, bc - 1))
-	CALL l_in.replace(" nchar", " CHAR", 0)       -- Genero doesn't support nchar
-	CALL l_in.replace(" nvarchar", " VARCHAR", 0) -- Genero doesn't support nvarchar
-	CALL l_in.replace(" lvarchar", " VARCHAR", 0) -- Genero doesn't support lvarchar
 	LET l_in_s = l_in.toString().trim()
 	LET y      = 1
 	LET x      = 1
@@ -276,9 +273,10 @@ FUNCTION getParams(l_func STRING, l_pf CHAR(1)) RETURNS(STRING, STRING, SMALLINT
 
 	--CALL out(SFMT("-- In: %1", l_in.toString() ) )
 	CALL l_params.append(l_in_s)
-	LET z = l_line.getLength()
-	CALL l_params.append(l_line.subString(bc, z))
+--	LET z = l_line.getLength()
+--	CALL l_params.append(l_line.subString(bc, z))
 	--CALL out(SFMT("-- Out: %1", l_line.subString(bc+9, z-1)))
+	CALL l_params.append(") ")
 
 -- handle RETURNS
 	DISPLAY "*** RETURNS Handling ***"
@@ -311,6 +309,9 @@ FUNCTION getParams(l_func STRING, l_pf CHAR(1)) RETURNS(STRING, STRING, SMALLINT
 			IF l_in_s.subString(1,2) = "--" THEN
 --				LET l_outvars_t[l_outvars_t.getLength()] = l_outvars_t[l_outvars_t.getLength()].append( l_in_s )
 			ELSE
+				IF l_in_s.getIndexOf(" as ",1) > 0 THEN
+					LET l_in_s = removeAs( l_in_s )
+				END IF
 				LET l_outvars_t[l_outvars_t.getLength() + 1] = l_in_s
 			END IF
 			LET x = z + 1
@@ -322,33 +323,59 @@ FUNCTION getParams(l_func STRING, l_pf CHAR(1)) RETURNS(STRING, STRING, SMALLINT
 			END IF
 		END WHILE
 		DISPLAY SFMT("Found: %1", l_outvars_t.getLength())
+		CALL l_params.append(" RETURNS ( ")
 		FOR x = 1 TO l_outvars_t.getLength()
+			CALL l_params.append( l_outvars_t[x] )
 			CALL l_rets.append(SFMT("\n  DEFINE p%1 %2", x, l_outvars_t[x].toUpperCase()))
+			IF x < l_outvars_t.getLength() THEN
+				CALL l_params.append( "\n,\t" )
+			END IF
 		END FOR
-	END IF
-
-	IF l_params.getIndexOf(" returns ", 1) > 1 THEN
-		CALL l_params.replace(" returns ", " RETURNS ( ", 1)
-		CALL l_params.append(")")
+		IF l_outvars_t.getLength() > 1 THEN
+				CALL l_params.append( "\t\n" )
+		END IF
+		CALL l_params.append(" )")
 		CALL l_params.append(l_rets.toString())
 	END IF
+
 	CALL c.close()
 	CALL l_params.replace(";", "", 0)
-	RETURN l_params.toString(), l_proto.toString(), l_rcnt, l_invars
+	RETURN l_params.toString(), l_proto.toString(), l_outvars_t.getLength(), l_invars
 END FUNCTION
 --------------------------------------------------------------------------------
-FUNCTION fixReturning(l_str STRING)
+FUNCTION fixReturning(l_str STRING) RETURNS STRING
 	DEFINE sb base.StringBuffer
 	LET sb = base.StringBuffer.create()
 	CALL sb.append( " " )
 	CALL sb.append( l_str )
 	CALL sb.append( " " )
+	CALL sb.replace("\t", " ", 0)  -- replace tabs
 	CALL sb.replace(";returning ", " returns ", 1) -- fix issue with procedures that return!
 	CALL sb.replace(")returning ", ") returns ", 1) -- fix issue with procedures that return!
 	CALL sb.replace(" returning ", " returns ", 1)  -- handle that some functions say returns instead of returning!
 	CALL sb.replace(" RETURNING ", " returns ", 1)  -- handle that some functions say returns instead of returning!
 	CALL sb.replace(" RETURNS ", " returns ", 1)  -- handle upper case
+	CALL sb.replace(" nchar", " CHAR", 0)       -- Genero doesn't support nchar
+	CALL sb.replace(" nvarchar", " VARCHAR", 0) -- Genero doesn't support nvarchar
+	CALL sb.replace(" lvarchar", " VARCHAR", 0) -- Genero doesn't support lvarchar
 	RETURN sb.toString().trim()
+END FUNCTION
+--------------------------------------------------------------------------------
+FUNCTION removeAs(l_str STRING) RETURNS STRING
+	DEFINE x, y SMALLINT
+	DEFINE l_ret STRING
+	LET y = l_str.getIndexOf(" as ",1)
+	LET l_ret = l_str.subString(1,y)
+	LET l_ret = l_ret.append( "{ as " )
+	FOR x = y+5 TO l_str.getLength()
+		LET l_ret = l_ret.append( l_str.getCharAt(x) )
+		IF l_str.getCharAt(x) = " " THEN
+			LET l_ret = l_ret.append( l_str.subString( x+1, l_str.getLength() ) )
+			EXIT FOR
+		END IF
+	END FOR
+	LET l_ret = l_ret.append( "}" )
+	RETURN l_ret
 END FUNCTION
 --------------------------------------------------------------------------------
 FUNCTION out(l_str STRING)
