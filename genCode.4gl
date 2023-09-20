@@ -1,33 +1,46 @@
 IMPORT os
 DEFINE m_c base.Channel
 MAIN
-	DEFINE c base.Channel
-	DEFINE l_db STRING
+	DEFINE c      base.Channel
+	DEFINE l_db   STRING
 	DEFINE l_file STRING
 	LET c = base.Channel.create()
 	IF base.Application.getArgumentCount() < 2 THEN
 		DISPLAY SFMT("Not enough args!\nfglrun %1 <db> <file>", base.Application.getProgramName())
 		EXIT PROGRAM
 	END IF
-	LET l_db = base.Application.getArgument(1)
+	LET l_db   = base.Application.getArgument(1)
 	LET l_file = base.Application.getArgument(2)
 	IF NOT os.Path.exists(l_file) THEN
 		DISPLAY SFMT("File '%1' doesn't exist!", l_file)
 		EXIT PROGRAM
 	END IF
+
 	LET m_c = base.Channel.create()
 	CALL m_c.openFile("tests2.4gl", "w")
 	CALL out(SFMT("SCHEMA %1", l_db))
 	CALL out("")
 	CALL c.openFile(l_file, "r")
 	WHILE NOT c.isEof()
-		CALL proc(c.readLine())
+		CALL proc(c.readLine(), "test")
 	END WHILE
 	CALL c.close()
 	CALL m_c.close()
+
+	LET m_c = base.Channel.create()
+	CALL m_c.openFile("fgl_sp.4gl", "w")
+	CALL out(SFMT("SCHEMA %1", l_db))
+	CALL out("")
+	CALL c.openFile(l_file, "r")
+	WHILE NOT c.isEof()
+		CALL proc(c.readLine(), "sp")
+	END WHILE
+	CALL c.close()
+	CALL m_c.close()
+
 END MAIN
 --------------------------------------------------------------------------------
-FUNCTION proc(l_line STRING)
+FUNCTION proc(l_line STRING, l_pre STRING)
 	DEFINE l_st      base.StringTokenizer
 	DEFINE l_func    STRING
 	DEFINE l_proc    CHAR(1)
@@ -60,45 +73,47 @@ FUNCTION proc(l_line STRING)
 	CALL getParams(l_func, l_proc) RETURNING l_params, l_proto, l_rets, l_invars
 	DISPLAY SFMT("Invars: %1", l_invars.getLength())
 	CALL out(SFMT("{%1}", l_proto))
-	CALL out(SFMT("FUNCTION test_%1(%2 ", l_func, l_params))
+	CALL out(SFMT("FUNCTION %1_%2(%3 ", l_pre, l_func, l_params))
 	CALL out("")
-	IF l_proc = "p" THEN
-		CALL out(SFMT("  EXECUTE IMMEDIATE \"EXECUTE PROCEDURE %1()\"", l_func))
-	ELSE
-		LET l_out = SFMT("  PREPARE pre_%1 FROM \"EXECUTE FUNCTION %1(", l_func)
-		IF l_invars.getLength() > 0 THEN
-			FOR x = 1 TO l_invars.getLength()
-				LET l_out = l_out.append("?")
-				IF x < l_invars.getLength() THEN
-					LET l_out = l_out.append(", ")
-				END IF
-			END FOR
+	IF l_pre = "test" THEN
+		IF l_proc = "p" THEN
+			CALL out(SFMT("  EXECUTE IMMEDIATE \"EXECUTE PROCEDURE %1()\"", l_func))
+		ELSE
+			LET l_out = SFMT("  PREPARE pre_%1 FROM \"EXECUTE FUNCTION %1(", l_func)
+			IF l_invars.getLength() > 0 THEN
+				FOR x = 1 TO l_invars.getLength()
+					LET l_out = l_out.append("?")
+					IF x < l_invars.getLength() THEN
+						LET l_out = l_out.append(", ")
+					END IF
+				END FOR
+			END IF
+			CALL out(l_out || ")\"")
+			CALL out(SFMT("  DECLARE cur_%1 CURSOR FOR pre_%1 ", l_func))
+			LET l_out = SFMT("  OPEN cur_%1", l_func)
+			IF l_invars.getLength() > 0 THEN
+				LET l_out = l_out.append(" USING ")
+				FOR x = 1 TO l_invars.getLength()
+					LET l_out = l_out.append(l_invars[x])
+					IF x < l_invars.getLength() THEN
+						LET l_out = l_out.append(", ")
+					END IF
+				END FOR
+			END IF
+			CALL out(l_out)
+			LET l_out = SFMT("  FETCH cur_%1", l_func)
+			IF l_rets > 0 THEN
+				LET l_out = l_out.append(" INTO ")
+				FOR x = 1 TO l_rets
+					LET l_out = l_out.append(SFMT("p%1", x))
+					IF x < l_rets THEN
+						LET l_out = l_out.append(",")
+					END IF
+				END FOR
+			END IF
+			CALL out(l_out)
+			CALL out(SFMT("  CLOSE cur_%1", l_func))
 		END IF
-		CALL out(l_out || ")\"")
-		CALL out(SFMT("  DECLARE cur_%1 CURSOR FOR pre_%1 ", l_func))
-		LET l_out = SFMT("  OPEN cur_%1", l_func)
-		IF l_invars.getLength() > 0 THEN
-			LET l_out = l_out.append(" USING ")
-			FOR x = 1 TO l_invars.getLength()
-				LET l_out = l_out.append(l_invars[x])
-				IF x < l_invars.getLength() THEN
-					LET l_out = l_out.append(", ")
-				END IF
-			END FOR
-		END IF
-		CALL out(l_out)
-		LET l_out = SFMT("  FETCH cur_%1", l_func)
-		IF l_rets > 0 THEN
-			LET l_out = l_out.append(" INTO ")
-			FOR x = 1 TO l_rets
-				LET l_out = l_out.append(SFMT("p%1", x))
-				IF x < l_rets THEN
-					LET l_out = l_out.append(",")
-				END IF
-			END FOR
-		END IF
-		CALL out(l_out)
-		CALL out(SFMT("  CLOSE cur_%1", l_func))
 	END IF
 	CALL out("")
 	IF l_rets > 0 THEN
@@ -187,7 +202,7 @@ FUNCTION getParams(l_func STRING, l_pf CHAR(1)) RETURNS(STRING, STRING, SMALLINT
 			END WHILE
 --			DISPLAY SFMT("l_proto: %1 z: %2 b: %3 bc: %4 l_bcnt: %5", l_proto.toString(), z, b, bc, l_bcnt)
 			IF z = -1 AND l_bcnt = 0 AND l_pf = "p" THEN -- if no ; and we found last ) for function then add a ;
-				IF l_proto.getIndexOf(" returns ",1) = 0 THEN
+				IF l_proto.getIndexOf(" returns ", 1) = 0 THEN
 					CALL l_proto.append(";")
 				END IF
 			END IF
@@ -214,7 +229,7 @@ FUNCTION getParams(l_func STRING, l_pf CHAR(1)) RETURNS(STRING, STRING, SMALLINT
 	LET y      = 1
 	LET x      = 1
 	WHILE TRUE
-		DISPLAY SFMT("'%1'",l_in_s)
+		DISPLAY SFMT("'%1'", l_in_s)
 		DISPLAY " 123456789 123456789 123456789 123456789 1234567890"
 		DISPLAY SFMT("y: %1 charY: '%2' ", y, l_in_s.getCharAt(y))
 		LET x = l_in_s.getIndexOf(" ", y)
@@ -222,7 +237,7 @@ FUNCTION getParams(l_func STRING, l_pf CHAR(1)) RETURNS(STRING, STRING, SMALLINT
 			EXIT WHILE
 		END IF
 		LET l_invars[l_invars.getLength() + 1] = l_in_s.subString(y, x - 1)
-		LET z = l_in_s.getIndexOf("\n",x) -1
+		LET z                                  = l_in_s.getIndexOf("\n", x) - 1
 		IF z < 1 THEN
 			LET z = l_in_s.getIndexOf(",", x) - 1
 		END IF
@@ -235,23 +250,31 @@ FUNCTION getParams(l_func STRING, l_pf CHAR(1)) RETURNS(STRING, STRING, SMALLINT
 			LET z = l_in_s.getIndexOf(")", x + 1)
 			WHILE TRUE
 				LET z = z + 1
-				IF l_in_s.subString(z,z+1) = "--" THEN
+				IF l_in_s.subString(z, z + 1) = "--" THEN
 					WHILE TRUE
 						LET z = z + 1
-						IF z > l_in_s.getLength() THEN EXIT WHILE END IF
-						IF l_in_s.getCharAt(z) = "\n" THEN EXIT WHILE END IF
-						LET l_type = l_type.append( l_in_s.getCharAt(z) )
+						IF z > l_in_s.getLength() THEN
+							EXIT WHILE
+						END IF
+						IF l_in_s.getCharAt(z) = "\n" THEN
+							EXIT WHILE
+						END IF
+						LET l_type = l_type.append(l_in_s.getCharAt(z))
 					END WHILE
 				END IF
-				IF z > l_in_s.getLength() THEN EXIT WHILE END IF
-				IF l_in_s.getCharAt(z) = "," THEN EXIT WHILE END IF
-				LET l_type = l_type.append( l_in_s.getCharAt(z) )
+				IF z > l_in_s.getLength() THEN
+					EXIT WHILE
+				END IF
+				IF l_in_s.getCharAt(z) = "," THEN
+					EXIT WHILE
+				END IF
+				LET l_type = l_type.append(l_in_s.getCharAt(z))
 			END WHILE
 		END IF
-		IF l_type.getIndexOf("--",3) > 0 THEN
-			IF l_in_s.getIndexOf("\n",x) > 0 THEN
+		IF l_type.getIndexOf("--", 3) > 0 THEN
+			IF l_in_s.getIndexOf("\n", x) > 0 THEN
 				DISPLAY "Found comment with newline"
-				LET z = l_in_s.getIndexOf("\n",x)
+				LET z = l_in_s.getIndexOf("\n", x)
 			ELSE
 				DISPLAY "Found comment without newline"
 			END IF
@@ -297,20 +320,22 @@ FUNCTION getParams(l_func STRING, l_pf CHAR(1)) RETURNS(STRING, STRING, SMALLINT
 			END IF
 			LET l_in_s = l_line.subString(x, z)
 			IF l_in_s.subString(1, 8).toLowerCase() = "decimal(" THEN
-				LET z = l_line.getIndexOf(")", x + 1)
+				LET z      = l_line.getIndexOf(")", x + 1)
 				LET l_in_s = l_line.subString(x, z)
 			END IF
-			IF l_in_s.getIndexOf("--",1) > 0 THEN
-				LET z = l_line.getIndexOf("\n", x)
-				LET l_in_s = l_line.subString(x, z-1)
+			IF l_in_s.getIndexOf("--", 1) > 0 THEN
+				LET z      = l_line.getIndexOf("\n", x)
+				LET l_in_s = l_line.subString(x, z - 1)
 			END IF
 			DISPLAY SFMT("x: %1 z: %2 Type: '%3'", x, z, l_in_s)
-			IF x > z THEN EXIT WHILE END IF
-			IF l_in_s.subString(1,2) = "--" THEN
+			IF x > z THEN
+				EXIT WHILE
+			END IF
+			IF l_in_s.subString(1, 2) = "--" THEN
 --				LET l_outvars_t[l_outvars_t.getLength()] = l_outvars_t[l_outvars_t.getLength()].append( l_in_s )
 			ELSE
-				IF l_in_s.getIndexOf(" as ",1) > 0 THEN
-					LET l_in_s = removeAs( l_in_s )
+				IF l_in_s.getIndexOf(" as ", 1) > 0 THEN
+					LET l_in_s = removeAs(l_in_s)
 				END IF
 				LET l_outvars_t[l_outvars_t.getLength() + 1] = l_in_s
 			END IF
@@ -325,14 +350,14 @@ FUNCTION getParams(l_func STRING, l_pf CHAR(1)) RETURNS(STRING, STRING, SMALLINT
 		DISPLAY SFMT("Found: %1", l_outvars_t.getLength())
 		CALL l_params.append(" RETURNS ( ")
 		FOR x = 1 TO l_outvars_t.getLength()
-			CALL l_params.append( l_outvars_t[x] )
+			CALL l_params.append(l_outvars_t[x])
 			CALL l_rets.append(SFMT("\n  DEFINE p%1 %2", x, l_outvars_t[x].toUpperCase()))
 			IF x < l_outvars_t.getLength() THEN
-				CALL l_params.append( "\n,\t" )
+				CALL l_params.append("\n,\t")
 			END IF
 		END FOR
 		IF l_outvars_t.getLength() > 1 THEN
-				CALL l_params.append( "\t\n" )
+			CALL l_params.append("\t\n")
 		END IF
 		CALL l_params.append(" )")
 		CALL l_params.append(l_rets.toString())
@@ -346,35 +371,36 @@ END FUNCTION
 FUNCTION fixReturning(l_str STRING) RETURNS STRING
 	DEFINE sb base.StringBuffer
 	LET sb = base.StringBuffer.create()
-	CALL sb.append( " " )
-	CALL sb.append( l_str )
-	CALL sb.append( " " )
-	CALL sb.replace("\t", " ", 0)  -- replace tabs
-	CALL sb.replace(";returning ", " returns ", 1) -- fix issue with procedures that return!
+	CALL sb.append(" ")
+	CALL sb.append(l_str)
+	CALL sb.append(" ")
+	CALL sb.replace("\t", " ", 0)                   -- replace tabs
+	CALL sb.replace(";returning ", " returns ", 1)  -- fix issue with procedures that return!
 	CALL sb.replace(")returning ", ") returns ", 1) -- fix issue with procedures that return!
 	CALL sb.replace(" returning ", " returns ", 1)  -- handle that some functions say returns instead of returning!
 	CALL sb.replace(" RETURNING ", " returns ", 1)  -- handle that some functions say returns instead of returning!
-	CALL sb.replace(" RETURNS ", " returns ", 1)  -- handle upper case
-	CALL sb.replace(" nchar", " CHAR", 0)       -- Genero doesn't support nchar
-	CALL sb.replace(" nvarchar", " VARCHAR", 0) -- Genero doesn't support nvarchar
-	CALL sb.replace(" lvarchar", " VARCHAR", 0) -- Genero doesn't support lvarchar
+	CALL sb.replace(" RETURNS ", " returns ", 1)    -- handle upper case
+	CALL sb.replace(" nchar", " CHAR", 0)           -- Genero doesn't support nchar
+	CALL sb.replace(",nchar", ",CHAR", 0)           -- Genero doesn't support nchar
+	CALL sb.replace(" nvarchar", " VARCHAR", 0)     -- Genero doesn't support nvarchar
+	CALL sb.replace(" lvarchar", " VARCHAR", 0)     -- Genero doesn't support lvarchar
 	RETURN sb.toString().trim()
 END FUNCTION
 --------------------------------------------------------------------------------
 FUNCTION removeAs(l_str STRING) RETURNS STRING
-	DEFINE x, y SMALLINT
+	DEFINE x, y  SMALLINT
 	DEFINE l_ret STRING
-	LET y = l_str.getIndexOf(" as ",1)
-	LET l_ret = l_str.subString(1,y)
-	LET l_ret = l_ret.append( "{ as " )
-	FOR x = y+5 TO l_str.getLength()
-		LET l_ret = l_ret.append( l_str.getCharAt(x) )
+	LET y     = l_str.getIndexOf(" as ", 1)
+	LET l_ret = l_str.subString(1, y)
+	LET l_ret = l_ret.append("{ as ")
+	FOR x = y + 5 TO l_str.getLength()
+		LET l_ret = l_ret.append(l_str.getCharAt(x))
 		IF l_str.getCharAt(x) = " " THEN
-			LET l_ret = l_ret.append( l_str.subString( x+1, l_str.getLength() ) )
+			LET l_ret = l_ret.append(l_str.subString(x + 1, l_str.getLength()))
 			EXIT FOR
 		END IF
 	END FOR
-	LET l_ret = l_ret.append( "}" )
+	LET l_ret = l_ret.append("}")
 	RETURN l_ret
 END FUNCTION
 --------------------------------------------------------------------------------
